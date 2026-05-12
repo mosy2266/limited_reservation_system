@@ -16,17 +16,26 @@ public class PaymentService {
     }
 
     public PaymentResult pay(PaymentCommand command) {
-        // 결제 수단별 실패 정책은 processor 구현체에 위임해 Booking 로직 변경을 줄인다.
-        PaymentProcessor processor = processors.stream()
-                .filter(candidate -> candidate.supports(command.method()))
-                .findFirst()
-                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_PAYMENT_COMBINATION));
-
-        PaymentResult result = processor.pay(command);
+        PaymentResult result = findProcessor(command.method()).pay(command);
         if (!result.isApproved()) {
             throw new BusinessException(result.failureReason().getErrorCode());
         }
+
+        if (command.method() != PaymentMethod.POINT && command.pointAmount() > 0) {
+            PaymentResult pointResult = findProcessor(PaymentMethod.POINT).pay(command);
+            if (!pointResult.isApproved()) {
+                throw new BusinessException(pointResult.failureReason().getErrorCode());
+            }
+        }
+
         return result;
+    }
+
+    private PaymentProcessor findProcessor(PaymentMethod method) {
+        return processors.stream()
+                .filter(candidate -> candidate.supports(method))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_PAYMENT_COMBINATION));
     }
 
     public void validateCombination(PaymentMethod method, long paymentAmount, long pointAmount) {

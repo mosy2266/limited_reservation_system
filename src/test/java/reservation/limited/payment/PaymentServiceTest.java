@@ -60,6 +60,20 @@ class PaymentServiceTest {
     }
 
     @Test
+    void payRejectsCardAndPointPaymentWhenPointIsNotEnough() {
+        assertThatThrownBy(() -> paymentService.pay(new PaymentCommand(PaymentMethod.CARD, 1L, 30_001L)))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.POINT_NOT_ENOUGH));
+    }
+
+    @Test
+    void payRejectsPayAndPointPaymentWhenPointIsNotEnough() {
+        assertThatThrownBy(() -> paymentService.pay(new PaymentCommand(PaymentMethod.PAY, 1L, 30_001L)))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.POINT_NOT_ENOUGH));
+    }
+
+    @Test
     void validateCombinationAllowsCardAndPoint() {
         paymentService.validateCombination(PaymentMethod.CARD, 70_000L, 30_000L);
     }
