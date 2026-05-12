@@ -18,7 +18,8 @@ flowchart LR
         OutboxPublisher[Outbox Publisher Scheduler]
     end
 
-    CheckoutApi --> MySQL[(MySQL)]
+    CheckoutApi --> CheckoutCache[(Redis Checkout Cache)]
+    CheckoutCache --> MySQL[(MySQL)]
     BookingApi --> Redis[(Redis Cluster)]
     BookingApi --> MySQL
     BookingApi --> OutboxTable[(outbox_events)]
@@ -28,8 +29,9 @@ flowchart LR
 
 위 다이어그램은 API 흐름이 어떤 외부 저장소와 미들웨어를 사용하는지에 초점을 맞춥니다.
 
-- Checkout API는 Redis나 Kafka를 거치지 않고 MySQL에서 상품 정보를 조회합니다.
+- Checkout API는 Redis Checkout Cache를 먼저 조회하고, cache miss 또는 Redis 장애 시 MySQL로 fallback합니다.
 - Booking API는 Redis로 재고 선점, 멱등성, rate limit을 처리하고 MySQL에 예약/결제/재고/outbox 상태를 저장합니다.
+- Checkout Cache는 조회 부하 완화용이며, 최종 재고 정합성은 Booking API의 MySQL 조건부 `UPDATE`가 보장합니다.
 - Booking API는 Kafka에 직접 발행하지 않고, `OutboxPublisher`가 `outbox_events`를 읽어 Kafka로 발행합니다.
 
 ## 도메인 역할
