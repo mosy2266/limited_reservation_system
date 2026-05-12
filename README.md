@@ -1,6 +1,6 @@
 # Limited Reservation System
 
-한정 수량 상품의 주문 진입, 예약, 결제, 재고 차감, 예약 확정 이벤트 발행을 처리하는 Spring Boot 기반 예약 시스템입니다. 
+한정 수량 상품의 주문 진입, 예약, 결제, 재고 차감, 예약 확정 이벤트 발행을 처리하는 Spring Boot 기반 예약 시스템입니다.
 
 2대 이상의 애플리케이션 서버가 동시에 요청을 처리하는 분산 환경을 가정하며,
 
@@ -40,7 +40,9 @@ flowchart LR
 
 Booking API는 Kafka에 직접 이벤트를 발행하지 않습니다.
 
-예약, 결제, 재고, outbox 저장이 먼저 하나의 DB 트랜잭션으로 커밋되고, 이후 `OutboxPublisher`가 `outbox_events`의 `PENDING` 이벤트를 Kafka로 발행합니다.
+예약, 결제, 재고, outbox 저장이 먼저 하나의 DB 트랜잭션으로 커밋되고,
+
+이후 `OutboxPublisher`가 `outbox_events`의 `PENDING` 이벤트를 Kafka로 발행합니다.
 
 ## 예약 생성 시퀀스 다이어그램
 
@@ -54,18 +56,59 @@ sequenceDiagram
     participant O as Outbox Publisher
     participant K as Kafka
 
-    C->>B: POST /api/v1/bookings<br/>Idempotency-Key
-    B->>R: 멱등성/처리중/rate limit 확인
-    B->>DB: 상품 조회 및 기존 예약 확인
-    B->>R: 재고 선점
-    B->>DB: 조건부 재고 차감 UPDATE
-    DB-->>B: updated row count
-    B->>P: 결제 수단 및 잔액 검증
-    B->>DB: booking/payment/outbox 저장
-    DB-->>B: commit
-    B-->>C: 예약 확정 응답
-    O->>DB: PENDING outbox 이벤트 조회
-    O->>K: 예약 확정 이벤트 발행
+    C->>B: POST /api/v1/bookings with Idempotency-Key
+
+    alt Missing Idempotency-Key
+        B-->>C: 400 MISSING_IDEMPOTENCY_KEY
+    else Valid request header
+        B->>R: idempotency, processing lock, rate limit check
+
+        alt Same request is already processing
+            B-->>C: 409 IDEMPOTENCY_ALREADY_PROCESSING
+        else Redis guard passed or fallback
+            B->>DB: product lookup
+
+            alt Product not found or sale unavailable
+                B-->>C: 404/409/410 product error
+            else Product is available
+                B->>DB: existing booking lookup by idempotency key
+
+                alt Same idempotency key and same request
+                    B-->>C: return existing booking
+                else Same idempotency key and different request
+                    B-->>C: 409 IDEMPOTENCY_KEY_CONFLICT
+                else New booking request
+                    B->>DB: duplicated user-product booking check
+
+                    alt User already booked product
+                        B-->>C: 409 DUPLICATED_BOOKING
+                    else New user-product booking
+                        B->>R: reserve stock
+                        B->>DB: conditional inventory UPDATE
+                        DB-->>B: updated row count
+
+                        alt Stock unavailable
+                            B->>R: restore reserved stock if needed
+                            B-->>C: 410 SOLD_OUT
+                        else Stock updated
+                            B->>P: payment validation
+
+                            alt Payment failed
+                                B->>R: restore reserved stock if needed
+                                B-->>C: 422 payment failure
+                            else Payment approved
+                                B->>DB: save booking, payment, outbox
+                                DB-->>B: commit
+                                B-->>C: booking confirmed response
+                                O->>DB: load PENDING outbox events
+                                O->>K: publish booking confirmed event
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 ```
 
 재고 차감은 아래 조건부 업데이트로 처리합니다. 영향 받은 row 수가 `0`이면 품절로 판단합니다.
@@ -87,6 +130,17 @@ UPDATE inventories
 - MySQL 8.x
 - Redis Cluster: master 3개, replica 3개 권장
 - Kafka
+
+### 기본 설정
+
+`src/main/resources/application.properties`는 환경 변수로 덮어쓸 수 있습니다.
+
+| 항목 | 기본값 |
+| --- | --- |
+| `DB_URL` | `jdbc:mysql://localhost:3307/limited_reservation` |
+| `REDIS_CLUSTER_NODES` | `localhost:7000,localhost:7001,localhost:7002,localhost:7003,localhost:7004,localhost:7005` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
+| `BOOKING_EVENTS_TOPIC` | `booking-events` |
 
 ### 애플리케이션 실행
 
