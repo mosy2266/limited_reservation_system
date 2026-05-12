@@ -6,7 +6,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import reservation.limited.common.BusinessException;
 import reservation.limited.common.ErrorCode;
-import reservation.limited.inventory.Inventory;
 import reservation.limited.inventory.InventoryRepository;
 import reservation.limited.inventory.RedisInventoryStockGate;
 import reservation.limited.outbox.BookingConfirmedPayload;
@@ -113,12 +112,8 @@ public class BookingService {
     }
 
     private BookingResponse confirmWithDatabase(String idempotencyKey, Product product, BookingRequest request) {
-        Inventory inventory = inventoryRepository.findWithLockByProductId(product.getId())
-                .orElseThrow(() -> new BusinessException(ErrorCode.SOLD_OUT));
-
-        try {
-            inventory.sell();
-        } catch (IllegalStateException exception) {
+        int updatedCount = inventoryRepository.increaseSoldQuantityIfAvailable(product.getId());
+        if (updatedCount == 0) {
             throw new BusinessException(ErrorCode.SOLD_OUT);
         }
 

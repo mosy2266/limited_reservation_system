@@ -6,7 +6,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 import reservation.limited.common.BusinessException;
 import reservation.limited.common.ErrorCode;
-import reservation.limited.inventory.Inventory;
 import reservation.limited.inventory.InventoryRepository;
 import reservation.limited.inventory.RedisInventoryStockGate;
 import reservation.limited.outbox.OutboxEvent;
@@ -113,13 +112,12 @@ class BookingServiceTest {
     @Test
     void bookCreatesBookingAndPaymentWhenRequestIsValid() {
         Product product = product(ProductStatus.AVAILABLE, -1, 1, 100_000L);
-        Inventory inventory = new Inventory(1L, 5, 0);
         BookingRequest request = request(1L, 1L, PaymentMethod.CARD, 70_000L, 30_000L);
         given(productRepository.findById(1L)).willReturn(Optional.of(product));
         given(bookingRepository.findByIdempotencyKey("key-1")).willReturn(Optional.empty());
         given(bookingRepository.existsByUserIdAndProductId(1L, 1L)).willReturn(false);
         given(stockGate.reserve(1L)).willReturn(Optional.empty());
-        given(inventoryRepository.findWithLockByProductId(1L)).willReturn(Optional.of(inventory));
+        given(inventoryRepository.increaseSoldQuantityIfAvailable(1L)).willReturn(1);
         given(paymentService.pay(any(PaymentCommand.class))).willReturn(PaymentResult.approved());
         given(bookingNoGenerator.generate()).willReturn("B1");
         given(bookingRepository.save(any(Booking.class))).willAnswer(invocation -> {
@@ -132,7 +130,6 @@ class BookingServiceTest {
 
         assertThat(response.bookingId()).isEqualTo(100L);
         assertThat(response.status()).isEqualTo(BookingStatus.CONFIRMED);
-        assertThat(inventory.getSoldQuantity()).isEqualTo(1);
         verify(paymentRepository).save(any());
         verify(outboxEventRepository).save(any(OutboxEvent.class));
     }
@@ -140,14 +137,13 @@ class BookingServiceTest {
     @Test
     void bookRestoresRedisStockWhenPaymentFailsAfterRedisReservation() {
         Product product = product(ProductStatus.AVAILABLE, -1, 1, 100_000L);
-        Inventory inventory = new Inventory(1L, 5, 0);
         var reservation = new RedisInventoryStockGate.StockReservation(1L);
         BookingRequest request = request(1L, 1L, PaymentMethod.CARD, 70_000L, 30_000L);
         given(productRepository.findById(1L)).willReturn(Optional.of(product));
         given(bookingRepository.findByIdempotencyKey("key-1")).willReturn(Optional.empty());
         given(bookingRepository.existsByUserIdAndProductId(1L, 1L)).willReturn(false);
         given(stockGate.reserve(1L)).willReturn(Optional.of(reservation));
-        given(inventoryRepository.findWithLockByProductId(1L)).willReturn(Optional.of(inventory));
+        given(inventoryRepository.increaseSoldQuantityIfAvailable(1L)).willReturn(1);
         given(paymentService.pay(any(PaymentCommand.class)))
                 .willThrow(new BusinessException(ErrorCode.CARD_LIMIT_EXCEEDED));
 
@@ -171,13 +167,12 @@ class BookingServiceTest {
     @Test
     void bookThrowsSoldOutWhenDatabaseStockIsSoldOut() {
         Product product = product(ProductStatus.AVAILABLE, -1, 1, 100_000L);
-        Inventory inventory = new Inventory(1L, 1, 1);
         BookingRequest request = request(1L, 1L, PaymentMethod.CARD, 70_000L, 30_000L);
         given(productRepository.findById(1L)).willReturn(Optional.of(product));
         given(bookingRepository.findByIdempotencyKey("key-1")).willReturn(Optional.empty());
         given(bookingRepository.existsByUserIdAndProductId(1L, 1L)).willReturn(false);
         given(stockGate.reserve(1L)).willReturn(Optional.empty());
-        given(inventoryRepository.findWithLockByProductId(1L)).willReturn(Optional.of(inventory));
+        given(inventoryRepository.increaseSoldQuantityIfAvailable(1L)).willReturn(0);
 
         assertBusinessException(() -> bookingService.book("key-1", request), ErrorCode.SOLD_OUT);
     }
@@ -185,14 +180,13 @@ class BookingServiceTest {
     @Test
     void bookRestoresRedisStockWhenDatabaseUniqueConstraintFails() {
         Product product = product(ProductStatus.AVAILABLE, -1, 1, 100_000L);
-        Inventory inventory = new Inventory(1L, 5, 0);
         var reservation = new RedisInventoryStockGate.StockReservation(1L);
         BookingRequest request = request(1L, 1L, PaymentMethod.CARD, 70_000L, 30_000L);
         given(productRepository.findById(1L)).willReturn(Optional.of(product));
         given(bookingRepository.findByIdempotencyKey("key-1")).willReturn(Optional.empty());
         given(bookingRepository.existsByUserIdAndProductId(1L, 1L)).willReturn(false);
         given(stockGate.reserve(1L)).willReturn(Optional.of(reservation));
-        given(inventoryRepository.findWithLockByProductId(1L)).willReturn(Optional.of(inventory));
+        given(inventoryRepository.increaseSoldQuantityIfAvailable(1L)).willReturn(1);
         given(paymentService.pay(any(PaymentCommand.class))).willReturn(PaymentResult.approved());
         given(bookingNoGenerator.generate()).willReturn("B1");
         given(bookingRepository.save(any(Booking.class))).willThrow(new DataIntegrityViolationException("duplicate"));
