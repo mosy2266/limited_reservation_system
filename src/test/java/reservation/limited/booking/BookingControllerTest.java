@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import reservation.limited.inventory.Inventory;
 import reservation.limited.inventory.InventoryRepository;
 import reservation.limited.inventory.RedisInventoryStockGate;
+import reservation.limited.messaging.MessagePublisher;
 import reservation.limited.product.Product;
 import reservation.limited.product.ProductRepository;
 import reservation.limited.product.ProductStatus;
@@ -57,6 +58,9 @@ class BookingControllerTest {
 
     @MockitoBean
     private RedisInventoryStockGate stockGate;
+
+    @MockitoBean
+    private MessagePublisher messagePublisher;
 
     @BeforeEach
     void setUp() {

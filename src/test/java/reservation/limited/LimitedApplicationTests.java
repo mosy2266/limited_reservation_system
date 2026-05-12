@@ -3,6 +3,8 @@ package reservation.limited;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import reservation.limited.messaging.MessagePublisher;
 
 @SpringBootTest
 @TestPropertySource(properties = {
@@ -13,6 +15,9 @@ import org.springframework.test.context.TestPropertySource;
         "spring.jpa.hibernate.ddl-auto=create-drop"
 })
 class LimitedApplicationTests {
+
+    @MockitoBean
+    private MessagePublisher messagePublisher;
 
     @Test
     void contextLoads() {

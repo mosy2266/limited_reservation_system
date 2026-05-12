@@ -9,6 +9,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import reservation.limited.inventory.Inventory;
 import reservation.limited.inventory.InventoryRepository;
 import reservation.limited.inventory.RedisInventoryStockGate;
+import reservation.limited.messaging.MessagePublisher;
 import reservation.limited.payment.PaymentMethod;
 import reservation.limited.payment.PaymentRepository;
 import reservation.limited.product.Product;
@@ -59,6 +60,9 @@ class BookingConsistencyTest {
 
     @MockitoBean
     private RedisInventoryStockGate stockGate;
+
+    @MockitoBean
+    private MessagePublisher messagePublisher;
 
     @BeforeEach
     void setUp() {

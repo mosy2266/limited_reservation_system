@@ -9,6 +9,10 @@ import reservation.limited.common.ErrorCode;
 import reservation.limited.inventory.Inventory;
 import reservation.limited.inventory.InventoryRepository;
 import reservation.limited.inventory.RedisInventoryStockGate;
+import reservation.limited.outbox.BookingConfirmedPayload;
+import reservation.limited.outbox.OutboxEvent;
+import reservation.limited.outbox.OutboxEventRepository;
+import reservation.limited.outbox.OutboxPayloadSerializer;
 import reservation.limited.payment.Payment;
 import reservation.limited.payment.PaymentCommand;
 import reservation.limited.payment.PaymentRepository;
@@ -22,11 +26,16 @@ import java.util.Optional;
 @Service
 public class BookingService {
 
+    private static final String BOOKING_AGGREGATE_TYPE = "BOOKING";
+    private static final String BOOKING_CONFIRMED_EVENT_TYPE = "BOOKING_CONFIRMED";
+
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
     private final RedisInventoryStockGate stockGate;
     private final BookingRepository bookingRepository;
     private final PaymentRepository paymentRepository;
+    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxPayloadSerializer outboxPayloadSerializer;
     private final PaymentService paymentService;
     private final BookingNoGenerator bookingNoGenerator;
     private final BookingRequestHashGenerator requestHashGenerator;
@@ -34,7 +43,8 @@ public class BookingService {
 
     public BookingService(ProductRepository productRepository, InventoryRepository inventoryRepository,
                           RedisInventoryStockGate stockGate, BookingRepository bookingRepository,
-                          PaymentRepository paymentRepository, PaymentService paymentService,
+                          PaymentRepository paymentRepository, OutboxEventRepository outboxEventRepository,
+                          OutboxPayloadSerializer outboxPayloadSerializer, PaymentService paymentService,
                           BookingNoGenerator bookingNoGenerator, BookingRequestHashGenerator requestHashGenerator,
                           BookingTrafficGuard trafficGuard) {
         this.productRepository = productRepository;
@@ -42,6 +52,8 @@ public class BookingService {
         this.stockGate = stockGate;
         this.bookingRepository = bookingRepository;
         this.paymentRepository = paymentRepository;
+        this.outboxEventRepository = outboxEventRepository;
+        this.outboxPayloadSerializer = outboxPayloadSerializer;
         this.paymentService = paymentService;
         this.bookingNoGenerator = bookingNoGenerator;
         this.requestHashGenerator = requestHashGenerator;
@@ -131,10 +143,22 @@ public class BookingService {
             Booking savedBooking = bookingRepository.save(booking);
             paymentRepository.save(Payment.approved(savedBooking.getId(), request.payment().primaryMethod(),
                     request.payment().paymentAmount()));
+            saveBookingConfirmedOutbox(savedBooking);
             return BookingResponse.from(savedBooking);
         } catch (DataIntegrityViolationException exception) {
             throw new BusinessException(ErrorCode.DUPLICATED_BOOKING);
         }
+    }
+
+    private void saveBookingConfirmedOutbox(Booking booking) {
+        // 예약 확정 이벤트는 Booking/Payment/Inventory 변경과 같은 DB 트랜잭션에 저장한다.
+        String payload = outboxPayloadSerializer.serialize(BookingConfirmedPayload.from(booking));
+        outboxEventRepository.save(OutboxEvent.pending(
+                BOOKING_AGGREGATE_TYPE,
+                booking.getId(),
+                BOOKING_CONFIRMED_EVENT_TYPE,
+                payload
+        ));
     }
 
     private void validateProduct(Product product) {

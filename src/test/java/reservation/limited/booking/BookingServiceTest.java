@@ -9,6 +9,9 @@ import reservation.limited.common.ErrorCode;
 import reservation.limited.inventory.Inventory;
 import reservation.limited.inventory.InventoryRepository;
 import reservation.limited.inventory.RedisInventoryStockGate;
+import reservation.limited.outbox.OutboxEvent;
+import reservation.limited.outbox.OutboxEventRepository;
+import reservation.limited.outbox.OutboxPayloadSerializer;
 import reservation.limited.payment.PaymentCommand;
 import reservation.limited.payment.PaymentMethod;
 import reservation.limited.payment.PaymentRepository;
@@ -36,6 +39,8 @@ class BookingServiceTest {
     private final RedisInventoryStockGate stockGate = mock(RedisInventoryStockGate.class);
     private final BookingRepository bookingRepository = mock(BookingRepository.class);
     private final PaymentRepository paymentRepository = mock(PaymentRepository.class);
+    private final OutboxEventRepository outboxEventRepository = mock(OutboxEventRepository.class);
+    private final OutboxPayloadSerializer outboxPayloadSerializer = mock(OutboxPayloadSerializer.class);
     private final PaymentService paymentService = mock(PaymentService.class);
     private final BookingNoGenerator bookingNoGenerator = mock(BookingNoGenerator.class);
     private final BookingRequestHashGenerator requestHashGenerator = mock(BookingRequestHashGenerator.class);
@@ -47,6 +52,8 @@ class BookingServiceTest {
             stockGate,
             bookingRepository,
             paymentRepository,
+            outboxEventRepository,
+            outboxPayloadSerializer,
             paymentService,
             bookingNoGenerator,
             requestHashGenerator,
@@ -57,6 +64,7 @@ class BookingServiceTest {
     void setUp() {
         given(requestHashGenerator.generate(any())).willReturn("request-hash");
         given(trafficGuard.tryEnter(any(), any(), any(), any())).willReturn(Optional.empty());
+        given(outboxPayloadSerializer.serialize(any())).willReturn("{\"bookingId\":100}");
     }
 
     @Test
@@ -126,6 +134,7 @@ class BookingServiceTest {
         assertThat(response.status()).isEqualTo(BookingStatus.CONFIRMED);
         assertThat(inventory.getSoldQuantity()).isEqualTo(1);
         verify(paymentRepository).save(any());
+        verify(outboxEventRepository).save(any(OutboxEvent.class));
     }
 
     @Test
@@ -144,6 +153,7 @@ class BookingServiceTest {
 
         assertBusinessException(() -> bookingService.book("key-1", request), ErrorCode.CARD_LIMIT_EXCEEDED);
         verify(stockGate).restore(reservation);
+        verify(outboxEventRepository, never()).save(any());
     }
 
     @Test
