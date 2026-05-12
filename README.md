@@ -13,23 +13,34 @@ flowchart LR
     Client[Client] --> App[Spring Boot Application]
 
     subgraph App[Spring Boot Application]
-        Checkout[Checkout API]
-        Booking[Booking API]
-        Payment[Payment Service]
-        Inventory[Inventory Service]
+        CheckoutApi[Checkout API]
+        BookingApi[Booking API]
+        CheckoutService[Checkout Service]
+        BookingService[Booking Service]
+        PaymentService[Payment Service]
+        InventoryService[Inventory Service]
         OutboxPublisher[Outbox Publisher Scheduler]
     end
 
-    Checkout --> MySQL[(MySQL)]
-    Booking --> Payment
-    Booking --> Inventory
-    Booking --> MySQL
-    Payment --> MySQL
-    Booking --> OutboxTable[(outbox_events)]
+    CheckoutApi --> CheckoutService
+    BookingApi --> BookingService
+    CheckoutService --> ProductRepo[Product Repository]
+    BookingService --> ProductRepo
+    BookingService --> BookingRepo[Booking Repository]
+    BookingService --> PaymentService
+    BookingService --> InventoryService
+    BookingService --> OutboxRepo[Outbox Repository]
+    PaymentService --> PaymentRepo[Payment Repository]
+    InventoryService --> InventoryRepo[Inventory Repository]
+
+    ProductRepo --> MySQL[(MySQL)]
+    BookingRepo --> MySQL
+    PaymentRepo --> MySQL
+    InventoryRepo --> MySQL
+    OutboxRepo --> OutboxTable[(outbox_events)]
     OutboxPublisher --> OutboxTable
     OutboxPublisher --> Kafka[(Kafka)]
-    Inventory --> Redis[(Redis Cluster)]
-    Inventory --> MySQL
+    InventoryService --> Redis[(Redis Cluster)]
 ```
 
 - `checkout`: 주문 진입 화면에 필요한 상품/재고 정보를 조회합니다.
@@ -57,56 +68,27 @@ sequenceDiagram
     participant K as Kafka
 
     C->>B: POST /api/v1/bookings with Idempotency-Key
+    B->>R: idempotency, processing lock, rate limit check
+    B->>DB: product and existing booking lookup
+    B->>R: reserve stock
+    B->>DB: conditional inventory UPDATE
+    DB-->>B: updated row count
 
-    alt Missing Idempotency-Key
-        B-->>C: 400 MISSING_IDEMPOTENCY_KEY
-    else Valid request header
-        B->>R: idempotency, processing lock, rate limit check
+    alt Stock unavailable
+        B->>R: restore reserved stock if needed
+        B-->>C: 410 SOLD_OUT
+    else Stock updated
+        B->>P: payment validation
 
-        alt Same request is already processing
-            B-->>C: 409 IDEMPOTENCY_ALREADY_PROCESSING
-        else Redis guard passed or fallback
-            B->>DB: product lookup
-
-            alt Product not found or sale unavailable
-                B-->>C: 404/409/410 product error
-            else Product is available
-                B->>DB: existing booking lookup by idempotency key
-
-                alt Same idempotency key and same request
-                    B-->>C: return existing booking
-                else Same idempotency key and different request
-                    B-->>C: 409 IDEMPOTENCY_KEY_CONFLICT
-                else New booking request
-                    B->>DB: duplicated user-product booking check
-
-                    alt User already booked product
-                        B-->>C: 409 DUPLICATED_BOOKING
-                    else New user-product booking
-                        B->>R: reserve stock
-                        B->>DB: conditional inventory UPDATE
-                        DB-->>B: updated row count
-
-                        alt Stock unavailable
-                            B->>R: restore reserved stock if needed
-                            B-->>C: 410 SOLD_OUT
-                        else Stock updated
-                            B->>P: payment validation
-
-                            alt Payment failed
-                                B->>R: restore reserved stock if needed
-                                B-->>C: 422 payment failure
-                            else Payment approved
-                                B->>DB: save booking, payment, outbox
-                                DB-->>B: commit
-                                B-->>C: booking confirmed response
-                                O->>DB: load PENDING outbox events
-                                O->>K: publish booking confirmed event
-                            end
-                        end
-                    end
-                end
-            end
+        alt Payment failed
+            B->>R: restore reserved stock if needed
+            B-->>C: 422 payment failure
+        else Payment approved
+            B->>DB: save booking, payment, outbox
+            DB-->>B: commit
+            B-->>C: booking confirmed response
+            O->>DB: load PENDING outbox events
+            O->>K: publish booking confirmed event
         end
     end
 ```
