@@ -15,45 +15,30 @@ flowchart LR
     subgraph App[Spring Boot Application]
         CheckoutApi[Checkout API]
         BookingApi[Booking API]
-        CheckoutService[Checkout Service]
-        BookingService[Booking Service]
-        PaymentService[Payment Service]
-        InventoryService[Inventory Service]
         OutboxPublisher[Outbox Publisher Scheduler]
     end
 
-    CheckoutApi --> CheckoutService
-    BookingApi --> BookingService
-    CheckoutService --> ProductRepo[Product Repository]
-    BookingService --> ProductRepo
-    BookingService --> BookingRepo[Booking Repository]
-    BookingService --> PaymentService
-    BookingService --> InventoryService
-    BookingService --> OutboxRepo[Outbox Repository]
-    PaymentService --> PaymentRepo[Payment Repository]
-    InventoryService --> InventoryRepo[Inventory Repository]
-
-    ProductRepo --> MySQL[(MySQL)]
-    BookingRepo --> MySQL
-    PaymentRepo --> MySQL
-    InventoryRepo --> MySQL
-    OutboxRepo --> OutboxTable[(outbox_events)]
+    CheckoutApi --> MySQL[(MySQL)]
+    BookingApi --> Redis[(Redis Cluster)]
+    BookingApi --> MySQL
+    BookingApi --> OutboxTable[(outbox_events)]
     OutboxPublisher --> OutboxTable
     OutboxPublisher --> Kafka[(Kafka)]
-    InventoryService --> Redis[(Redis Cluster)]
 ```
+
+위 다이어그램은 API 흐름이 어떤 외부 저장소와 미들웨어를 사용하는지에 초점을 맞춥니다.
+
+- Checkout API는 Redis나 Kafka를 거치지 않고 MySQL에서 상품 정보를 조회합니다.
+- Booking API는 Redis로 재고 선점, 멱등성, rate limit을 처리하고 MySQL에 예약/결제/재고/outbox 상태를 저장합니다.
+- Booking API는 Kafka에 직접 발행하지 않고, `OutboxPublisher`가 `outbox_events`를 읽어 Kafka로 발행합니다.
+
+## 도메인 역할
 
 - `checkout`: 주문 진입 화면에 필요한 상품/재고 정보를 조회합니다.
 - `booking`: 예약 생성, 멱등성 키 검증, 중복 예약 방지, 예약 확정 흐름을 담당합니다.
 - `inventory`: Redis 재고 선점과 MySQL 조건부 `UPDATE` 기반 최종 재고 차감을 담당합니다.
 - `payment`: 신용카드, 페이, 포인트 결제 검증과 결제 실패 사유를 처리합니다.
-- `outbox`: 예약 확정 이벤트를 같은 DB 트랜잭션에서 `outbox_events`에 저장하고, scheduler가 Kafka로 발행합니다.
-
-Booking API는 Kafka에 직접 이벤트를 발행하지 않습니다.
-
-예약, 결제, 재고, outbox 저장이 먼저 하나의 DB 트랜잭션으로 커밋되고,
-
-이후 `OutboxPublisher`가 `outbox_events`의 `PENDING` 이벤트를 Kafka로 발행합니다.
+- `outbox`: 예약 확정 이벤트를 같은 DB 트랜잭션에서 `outbox_events`에 저장하고 scheduler가 Kafka로 발행합니다.
 
 ## 예약 생성 시퀀스 다이어그램
 
@@ -67,28 +52,27 @@ sequenceDiagram
     participant O as Outbox Publisher
     participant K as Kafka
 
-    C->>B: POST /api/v1/bookings with Idempotency-Key
-    B->>R: idempotency, processing lock, rate limit check
-    B->>DB: product and existing booking lookup
-    B->>R: reserve stock
-    B->>DB: conditional inventory UPDATE
-    DB-->>B: updated row count
+    C->>B: POST /api/v1/bookings, Idempotency-Key
+    B->>R: 멱등성, 처리 중 락, rate limit 확인
+    B->>DB: 상품 및 기존 예약 조회
+    B->>R: Redis 재고 선점
+    B->>DB: 조건부 재고 차감 UPDATE
+    DB-->>B: 변경된 row 수 반환
 
-    alt Stock unavailable
-        B->>R: restore reserved stock if needed
+    alt 재고 부족
+        B->>R: 선점 재고 복구
         B-->>C: 410 SOLD_OUT
-    else Stock updated
-        B->>P: payment validation
-
-        alt Payment failed
-            B->>R: restore reserved stock if needed
-            B-->>C: 422 payment failure
-        else Payment approved
-            B->>DB: save booking, payment, outbox
-            DB-->>B: commit
-            B-->>C: booking confirmed response
-            O->>DB: load PENDING outbox events
-            O->>K: publish booking confirmed event
+    else 재고 차감 성공
+        B->>P: 결제 수단 및 잔액 검증
+        alt 결제 실패
+            B->>R: 선점 재고 복구
+            B-->>C: 422 결제 실패
+        else 결제 성공
+            B->>DB: 예약, 결제, outbox 저장
+            DB-->>B: 커밋
+            B-->>C: 예약 확정 응답
+            O->>DB: PENDING outbox 이벤트 조회
+            O->>K: 예약 확정 이벤트 발행
         end
     end
 ```
@@ -112,17 +96,6 @@ UPDATE inventories
 - MySQL 8.x
 - Redis Cluster: master 3개, replica 3개 권장
 - Kafka
-
-### 기본 설정
-
-`src/main/resources/application.properties`는 환경 변수로 덮어쓸 수 있습니다.
-
-| 항목 | 기본값 |
-| --- | --- |
-| `DB_URL` | `jdbc:mysql://localhost:3307/limited_reservation` |
-| `REDIS_CLUSTER_NODES` | `localhost:7000,localhost:7001,localhost:7002,localhost:7003,localhost:7004,localhost:7005` |
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` |
-| `BOOKING_EVENTS_TOPIC` | `booking-events` |
 
 ### 애플리케이션 실행
 
