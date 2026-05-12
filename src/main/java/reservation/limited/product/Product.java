@@ -8,10 +8,12 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import lombok.Getter;
 
 import java.time.LocalDateTime;
 
 @Entity
+@Getter
 @Table(name = "products")
 public class Product {
 
@@ -71,23 +73,8 @@ public class Product {
         return now.isAfter(saleCloseAt);
     }
 
-    public Long getId() {
-        return id;
+    public boolean isSaleNotOpen(LocalDateTime now) {
+        return now.isBefore(saleOpenAt);
     }
 
-    public String getName() {
-        return name;
-    }
-
-    public long getPrice() {
-        return price;
-    }
-
-    public LocalDateTime getCheckInAt() {
-        return checkInAt;
-    }
-
-    public LocalDateTime getCheckOutAt() {
-        return checkOutAt;
-    }
 }
