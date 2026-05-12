@@ -16,6 +16,13 @@ public record CheckoutResponse(
         );
     }
 
+    public static CheckoutResponse of(CheckoutProductCacheItem product, long userId, long availablePoint) {
+        return new CheckoutResponse(
+                ProductResponse.from(product),
+                new UserResponse(userId, availablePoint)
+        );
+    }
+
     public record ProductResponse(
             Long id,
             String name,
@@ -31,6 +38,16 @@ public record CheckoutResponse(
                     product.getPrice(),
                     product.getCheckInAt(),
                     product.getCheckOutAt()
+            );
+        }
+
+        private static ProductResponse from(CheckoutProductCacheItem product) {
+            return new ProductResponse(
+                    product.id(),
+                    product.name(),
+                    product.price(),
+                    product.checkInAt(),
+                    product.checkOutAt()
             );
         }
     }
